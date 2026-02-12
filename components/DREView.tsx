@@ -1,12 +1,13 @@
 
 import React from 'react';
 import { DRE_STRUCTURE } from '../constants';
+import { DREConfig } from '../types';
 
 interface DREViewProps {
   dreData: any;
   year: number;
-  config: { irTax: number; csllTax: number };
-  onUpdateConfig: (newConfig: { irTax: number; csllTax: number }) => void;
+  config: DREConfig;
+  onUpdateConfig: (newConfig: DREConfig) => void;
 }
 
 const DREView: React.FC<DREViewProps> = ({ dreData, year, config, onUpdateConfig }) => {
@@ -41,15 +42,26 @@ const DREView: React.FC<DREViewProps> = ({ dreData, year, config, onUpdateConfig
           <h2 className="text-xl font-bold dark:text-white">DRE - Demonstrativo ({year})</h2>
           <p className="text-xs text-slate-500">Regime de Caixa / Pagamentos Realizados</p>
         </div>
+        
         <div className="flex gap-4 items-center bg-white dark:bg-slate-800 p-3 rounded-lg border dark:border-slate-700">
            <div className="text-center">
+             <label className="block text-[10px] uppercase font-bold text-slate-400">Saldo Inicial Ano (R$)</label>
+             <input 
+              type="number" 
+              className="w-24 bg-transparent text-sm font-bold text-indigo-600 outline-none text-center" 
+              value={config.initialBalance} 
+              onChange={e => onUpdateConfig({...config, initialBalance: parseFloat(e.target.value) || 0})} 
+             />
+           </div>
+           <div className="w-px h-8 bg-slate-200 dark:bg-slate-700" />
+           <div className="text-center">
              <label className="block text-[10px] uppercase font-bold text-slate-400">IR (%)</label>
-             <input type="number" min="0" step="0.5" className="w-16 bg-transparent text-sm font-bold text-indigo-600 outline-none" value={config.irTax * 100} onChange={e => onUpdateConfig({...config, irTax: parseFloat(e.target.value) / 100})} />
+             <input type="number" min="0" step="0.5" className="w-16 bg-transparent text-sm font-bold text-indigo-600 outline-none text-center" value={config.irTax * 100} onChange={e => onUpdateConfig({...config, irTax: parseFloat(e.target.value) / 100})} />
            </div>
            <div className="w-px h-8 bg-slate-200 dark:bg-slate-700" />
            <div className="text-center">
              <label className="block text-[10px] uppercase font-bold text-slate-400">CSLL (%)</label>
-             <input type="number" min="0" step="0.5" className="w-16 bg-transparent text-sm font-bold text-indigo-600 outline-none" value={config.csllTax * 100} onChange={e => onUpdateConfig({...config, csllTax: parseFloat(e.target.value) / 100})} />
+             <input type="number" min="0" step="0.5" className="w-16 bg-transparent text-sm font-bold text-indigo-600 outline-none text-center" value={config.csllTax * 100} onChange={e => onUpdateConfig({...config, csllTax: parseFloat(e.target.value) / 100})} />
            </div>
         </div>
       </div>

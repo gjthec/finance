@@ -1,10 +1,10 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
-  mockAccounts as initialAccounts, 
-  mockTransactions as initialTransactions, 
-  mockDREConfig as initialDREConfig, 
-  mockGoals as initialGoals 
+  mockAccounts, 
+  mockTransactions, 
+  mockDREConfig, 
+  mockGoals 
 } from './data/mockData';
 import { 
   calculateMonthlySummary, 
@@ -28,25 +28,25 @@ import { Transaction, ChartOfAccount, DREConfig, Goal } from './types';
 type ViewMode = 'DASHBOARD' | 'TRANSACTIONS' | 'ACCOUNTS' | 'DRE' | 'GOALS';
 
 const App: React.FC = () => {
+  const now = new Date();
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [view, setView] = useState<ViewMode>('DASHBOARD');
-  const [year, setYear] = useState(2024);
-  const [month, setMonth] = useState(new Date().getMonth() + 1);
+  
+  // Inicia sempre no ano e mês atual
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
   const [loading, setLoading] = useState(FIREBASE_ON);
 
-  // Estados principais inicializados com mock data como fallback
-  const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions);
-  const [accounts, setAccounts] = useState<ChartOfAccount[]>(initialAccounts);
-  const [goals, setGoals] = useState<Goal[]>(initialGoals);
-  const [dreConfig, setDreConfig] = useState<DREConfig>(initialDREConfig);
+  const [transactions, setTransactions] = useState<Transaction[]>(FIREBASE_ON ? [] : mockTransactions);
+  const [accounts, setAccounts] = useState<ChartOfAccount[]>(FIREBASE_ON ? [] : mockAccounts);
+  const [goals, setGoals] = useState<Goal[]>(FIREBASE_ON ? [] : mockGoals);
+  const [dreConfig, setDreConfig] = useState<DREConfig>(FIREBASE_ON ? { year: now.getFullYear(), irTax: 0, csllTax: 0, initialBalance: 0 } : mockDREConfig);
   
-  // Modals
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
   const [isAccModalOpen, setIsAccModalOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [editingAcc, setEditingAcc] = useState<ChartOfAccount | null>(null);
 
-  // EFEITO DE CARREGAMENTO FIREBASE
   useEffect(() => {
     if (FIREBASE_ON) {
       const loadData = async () => {
@@ -58,12 +58,12 @@ const App: React.FC = () => {
             firebaseService.getDREConfig()
           ]);
 
-          if (fbTxs.length > 0) setTransactions(fbTxs);
-          if (fbAccs.length > 0) setAccounts(fbAccs);
-          if (fbGoals.length > 0) setGoals(fbGoals);
+          setTransactions(fbTxs);
+          setAccounts(fbAccs);
+          setGoals(fbGoals);
           if (fbDRE) setDreConfig(fbDRE);
         } catch (error) {
-          console.error("Erro ao carregar do Firebase, usando dados locais:", error);
+          console.error("Firebase Load Error:", error);
         } finally {
           setLoading(false);
         }
@@ -77,62 +77,102 @@ const App: React.FC = () => {
     else document.documentElement.classList.remove('dark');
   }, [theme]);
 
-  // Cálculos derivados (sempre atualizados quando o estado muda)
-  const monthlySummary = useMemo(() => calculateMonthlySummary(transactions, year, month), [transactions, year]);
-  const dreData = useMemo(() => calculateDRE(transactions, accounts, year, month, dreConfig.irTax, dreConfig.csllTax), [transactions, year, month, accounts, dreConfig]);
-  const goalsPerformance = useMemo(() => calculateGoalsPerformance(transactions, goals, accounts, year, month), [transactions, goals, accounts, year, month]);
-  const fullYearGoals = useMemo(() => calculateFullYearGoals(transactions, goals, accounts, year), [transactions, goals, accounts, year]);
+  // Lista de anos baseada nos lançamentos + ano atual
+  const availableYears = useMemo(() => {
+    const years = new Set([now.getFullYear()]);
+    transactions.forEach(t => {
+      const d = new Date(t.paymentDate || t.dueDate);
+      if (!isNaN(d.getTime())) years.add(d.getFullYear());
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  }, [transactions]);
 
-  // HANDLERS TRANSAÇÕES
+  const monthlySummary = useMemo(() => 
+    calculateMonthlySummary(transactions, year === 0 ? now.getFullYear() : year, month === 0 ? 1 : month, dreConfig.initialBalance), 
+  [transactions, year, month, dreConfig.initialBalance]);
+
+  const dreData = useMemo(() => 
+    calculateDRE(transactions, accounts, year === 0 ? now.getFullYear() : year, month === 0 ? undefined : month, dreConfig.irTax, dreConfig.csllTax), 
+  [transactions, year, month, accounts, dreConfig]);
+
+  const goalsPerformance = useMemo(() => 
+    calculateGoalsPerformance(transactions, goals, accounts, year === 0 ? now.getFullYear() : year, month === 0 ? 1 : month), 
+  [transactions, goals, accounts, year, month]);
+
+  const fullYearGoals = useMemo(() => 
+    calculateFullYearGoals(transactions, goals, accounts, year === 0 ? now.getFullYear() : year), 
+  [transactions, goals, accounts, year]);
+
   const handleSaveTx = async (tx: Transaction) => {
-    setTransactions(prev => editingTx ? prev.map(t => t.id === tx.id ? tx : t) : [tx, ...prev]);
-    if (FIREBASE_ON) await firebaseService.saveTransaction(tx);
+    const tempId = tx.id;
+    setTransactions(prev => {
+      const exists = prev.some(t => t.id === tempId);
+      if (exists) return prev.map(t => t.id === tempId ? tx : t);
+      return [tx, ...prev];
+    });
+
+    if (FIREBASE_ON) {
+      try {
+        const realId = await firebaseService.saveTransaction(tx);
+        if (realId && realId !== tempId) {
+          setTransactions(prev => prev.map(t => t.id === tempId ? { ...tx, id: realId } : t));
+        }
+      } catch (err) {
+        console.error("Error saving to Firebase", err);
+      }
+    }
   };
 
   const handleDeleteTx = async (id: string) => {
-    if (confirm('Excluir lançamento?')) {
+    if (confirm('Deseja excluir este lançamento permanentemente?')) {
       setTransactions(prev => prev.filter(t => t.id !== id));
       if (FIREBASE_ON) await firebaseService.deleteTransaction(id);
     }
   };
 
-  const handleToggleTxStatus = async (tx: Transaction) => {
-    const updated = { ...tx, paymentDate: tx.paymentDate ? null : new Date().toISOString().split('T')[0] };
-    handleSaveTx(updated);
+  const handleDeleteAcc = async (id: string) => {
+    if (confirm('Deseja excluir esta conta? Isso pode afetar lançamentos existentes.')) {
+      setAccounts(prev => prev.filter(a => a.id !== id));
+      if (FIREBASE_ON) await firebaseService.deleteAccount(id);
+    }
   };
 
-  // HANDLERS PLANO DE CONTAS
+  const handleToggleTxStatus = async (tx: Transaction) => {
+    const updated = { ...tx, paymentDate: tx.paymentDate ? null : new Date().toISOString().split('T')[0] };
+    await handleSaveTx(updated);
+  };
+
   const handleSaveAcc = async (acc: ChartOfAccount) => {
     setAccounts(prev => editingAcc ? prev.map(a => a.id === acc.id ? acc : a) : [...prev, acc]);
     if (FIREBASE_ON) await firebaseService.saveAccount(acc);
   };
 
-  const handleDeleteAcc = (id: string) => {
-    if (transactions.some(t => t.chartAccountId === id)) return alert('Não é possível excluir: existem lançamentos vinculados.');
-    if (confirm('Excluir esta conta contábil?')) setAccounts(prev => prev.filter(a => a.id !== id));
-    // Implementar deleteDoc no firebaseService se desejar exclusão real no banco
-  };
-
-  // HANDLERS METAS
   const handleUpdateMeta = async (accountId: string, m: number, value: number) => {
-    const existing = goals.find(g => g.chartAccountId === accountId && g.year === year && g.month === m);
+    const targetYear = year === 0 ? now.getFullYear() : year;
+    const existing = goals.find(g => g.chartAccountId === accountId && g.year === targetYear && g.month === m);
     let updatedGoal: Goal;
-    
     if (existing) {
       updatedGoal = { ...existing, targetValue: value };
       setGoals(prev => prev.map(g => g.id === existing.id ? updatedGoal : g));
     } else {
-      updatedGoal = { id: Math.random().toString(36).substr(2, 9), chartAccountId: accountId, year, month: m, targetValue: value };
+      updatedGoal = { id: Math.random().toString(36).substr(2, 9), chartAccountId: accountId, year: targetYear, month: m, targetValue: value };
       setGoals(prev => [...prev, updatedGoal]);
     }
-    
     if (FIREBASE_ON) await firebaseService.saveGoal(updatedGoal);
   };
 
-  // ATUALIZAÇÃO DRE CONFIG
   const handleUpdateDREConfig = async (newConfig: DREConfig) => {
     setDreConfig(newConfig);
     if (FIREBASE_ON) await firebaseService.saveDREConfig(newConfig);
+  };
+
+  const handleSeedFirebase = async () => {
+    if (!FIREBASE_ON) return alert("Ative FIREBASE_ON primeiro.");
+    if (confirm("Isso irá popular seu Firebase com dados de exemplo. Continuar?")) {
+      setLoading(true);
+      await firebaseService.seedData(mockTransactions, mockAccounts, mockGoals, mockDREConfig);
+      window.location.reload();
+    }
   };
 
   const NavItem = ({ mode, label, icon }: { mode: ViewMode, label: string, icon: React.ReactNode }) => (
@@ -144,7 +184,7 @@ const App: React.FC = () => {
   if (loading) return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 gap-4">
       <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-      <p className="text-sm font-bold text-slate-500 animate-pulse">Sincronizando com Firebase...</p>
+      <p className="text-sm font-bold text-slate-500 animate-pulse">Sincronizando dados financeiros...</p>
     </div>
   );
 
@@ -157,7 +197,7 @@ const App: React.FC = () => {
             <h1 className="font-bold text-slate-900 dark:text-white leading-none text-lg">Finanza</h1>
             <div className="flex items-center gap-1 mt-1">
                <p className="text-[10px] text-indigo-600 font-black uppercase tracking-widest">SaaS Core</p>
-               {FIREBASE_ON && <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-lg shadow-emerald-500/50" title="Conectado ao Firebase" />}
+               {FIREBASE_ON && <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" title="Firebase Ativo" />}
             </div>
           </div>
         </div>
@@ -168,6 +208,16 @@ const App: React.FC = () => {
           <NavItem mode="ACCOUNTS" label="Plano de Contas" icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7c0-2-1-3-3-3H7c-2 0-3 1-3 3zM9 12h6M9 16h6M9 8h6" /></svg>} />
           <NavItem mode="DRE" label="Relatório DRE" icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>} />
         </nav>
+        
+        {FIREBASE_ON && (
+          <button 
+            onClick={handleSeedFirebase}
+            className="w-full py-2 bg-slate-800 text-slate-300 rounded-lg text-[10px] font-bold border border-slate-700 hover:bg-slate-700 transition-colors"
+          >
+            POPULAR BANCO (SEED)
+          </button>
+        )}
+
         <div className="p-4 bg-indigo-50 dark:bg-indigo-950/30 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
            <p className="text-[10px] font-black text-indigo-700 dark:text-indigo-400 uppercase mb-2">Interface</p>
            <div className="flex bg-white dark:bg-slate-800 p-1 rounded-lg border dark:border-slate-700">
@@ -183,38 +233,42 @@ const App: React.FC = () => {
              <div className="h-10 px-4 flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg text-sm font-bold text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">Finanza LTDA</div>
              <div className="flex items-center gap-2">
                 <select className="bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 text-sm rounded-lg px-3 py-2 outline-none font-bold" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+                  <option value={0}>Todos os Meses</option>
                   {MONTHS.map((m, idx) => <option key={m} value={idx + 1}>{m}</option>)}
                 </select>
                 <select className="bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 text-sm rounded-lg px-3 py-2 outline-none font-bold" value={year} onChange={(e) => setYear(Number(e.target.value))}>
-                  <option value={2024}>2024</option><option value={2025}>2025</option>
+                  <option value={0}>Todos os Anos</option>
+                  {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
              </div>
           </div>
           <div className="flex items-center gap-4">
-            <div className="text-right"><p className="text-sm font-bold dark:text-white">Gerente Financeiro</p><p className="text-[10px] text-slate-400 font-bold uppercase">Online</p></div>
-            <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white font-black">GF</div>
+            <div className="text-right"><p className="text-sm font-bold dark:text-white">Gerente Financeiro</p><p className="text-[10px] text-slate-400 font-bold uppercase">Cloud Access</p></div>
+            <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white font-black shadow-lg shadow-indigo-600/20">GF</div>
           </div>
         </header>
 
         <div className="p-8 overflow-auto flex-grow custom-scrollbar">
-          {view === 'DASHBOARD' && <Dashboard summary={monthlySummary} currentMonth={month} performance={goalsPerformance} />}
+          {view === 'DASHBOARD' && <Dashboard summary={monthlySummary} currentMonth={month === 0 ? 1 : month} performance={goalsPerformance} />}
           {view === 'TRANSACTIONS' && (
             <TransactionsTable transactions={transactions.filter(t => {
                 const d = new Date(t.paymentDate || t.dueDate);
-                return d.getFullYear() === year && d.getMonth() === month - 1;
+                const matchYear = year === 0 || d.getFullYear() === year;
+                const matchMonth = month === 0 || d.getMonth() === month - 1;
+                return matchYear && matchMonth;
               })} accounts={accounts} onAdd={() => { setEditingTx(null); setIsTxModalOpen(true); }} onEdit={(t) => { setEditingTx(t); setIsTxModalOpen(true); }} onDelete={handleDeleteTx} onToggleStatus={handleToggleTxStatus} />
           )}
           {view === 'GOALS' && (
             <GoalsView 
               fullYearPerformance={fullYearGoals} 
-              year={year} 
+              year={year === 0 ? now.getFullYear() : year} 
               onUpdateMeta={handleUpdateMeta} 
             />
           )}
           {view === 'ACCOUNTS' && (
             <AccountsView accounts={accounts} onAdd={() => { setEditingAcc(null); setIsAccModalOpen(true); }} onEdit={(a) => { setEditingAcc(a); setIsAccModalOpen(true); }} onDelete={handleDeleteAcc} />
           )}
-          {view === 'DRE' && <DREView dreData={dreData} year={year} config={dreConfig} onUpdateConfig={handleUpdateDREConfig} />}
+          {view === 'DRE' && <DREView dreData={dreData} year={year === 0 ? now.getFullYear() : year} config={dreConfig} onUpdateConfig={handleUpdateDREConfig} />}
         </div>
       </main>
 

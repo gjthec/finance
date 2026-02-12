@@ -42,6 +42,7 @@ export interface DREConfig {
   year: number;
   irTax: number;
   csllTax: number;
+  initialBalance: number; // Saldo que inicia o ano
 }
 
 export interface CashFlowDay {
